@@ -1,9 +1,11 @@
 ---
 title: "Split-plot RCBD"
 format: html
+editor_options: 
+  chunk_output_type: console
 ---
 
-# Introduction  
+# Introduction  (Feb 18, 2025)
 The goals of this exercise are to:  
 - Create an analytical workflow for a **split-plot RCBD** with **random blocks**, from data import through publication-ready plot  
 - Understand each of its components  
@@ -29,7 +31,7 @@ You should NOT analyze a given designed study with a different design than what 
 This is not an option!  
 
 ```{r data import}
-spp_rcbd_df <- read_csv("../data/wheat_nk_balkh.csv")
+spp_rcbd_df <- read_csv("data/wheat_nk_balkh.csv")
 
 spp_rcbd_df
 ```
@@ -45,7 +47,7 @@ glimpse(spp_rcbd_df)
 # c) Wrangling
 ```{r rcbd_dfw}
 spp_rcbd_dfw <- spp_rcbd_df %>%
-  mutate(block = factor(block),
+  mutate(rep = factor(rep),
          nrate_kgha = factor(nrate_kgha),
          krate_kgha = factor(krate_kgha) 
          ) %>%
@@ -108,11 +110,21 @@ We have 2 random variance component from the split-plot because we have 2 differ
 # Changing to sum-to-zero contrast
 options(contrasts = c("contr.sum", "contr.poly"))
 
-# Model fitting
-spp_rcbd_mix_mod 
+# Model fitting. The rep is the block. For split-plot, we nest the whole-plot (krate) inside the rep (block); in SAS it would be the opposite. 
+spp_rcbd_mix_mod <- lmer(yield_kgha ~ krate_kgha * nrate_kgha + (1|rep/krate_kgha), 
+                         data = spp_rcbd_dfw)
 
 # Summary
 summary(spp_rcbd_mix_mod)
+
+# summary output: krate:rep and rep are the random effects. Residual comes from the nrate. 
+
+
+
+# In case we have P rate it would be a split-split-plot
+spp_rcbd_mix_mod <- lmer(yiel_kgha ~ krate_kgha * nrate_kgha * prate_kgha + (1|rep/krate_kgha/nrate_kgha)) # we do not specify the smallest size (the residual)
+
+# I can not randomize space and time. Time and space is linear (there is a connection), so have to analyze it as a repeated measure. For a split plot, all the whole plot and and split plot can be randomized. 
 ```
 
 Notice now how the `summary()` above has a new section for **random effects**, with 3 rows:  
@@ -123,14 +135,15 @@ Notice now how the `summary()` above has a new section for **random effects**, w
 # f) ANOVA table  
 ```{r ANOVA}
 Anova(spp_rcbd_mix_mod, type=3)
+
 ```
 Notice how this table is now titled "Analysis of Deviance Table". That's because we are using REML instead of mean squares.  
 
-Also notice how block (i.e., block in this case) does not appear in the ANOVA table above. That's because it only displays **fixed effects**.
+Also notice how block (i.e., rep in this case) does not appear in the ANOVA table above. That's because it only displays **fixed effects**.
 
 As before, since the interaction is significant here, we should extract means and perform pairwise comparisons for the interaction term.
 
-Before we do that, let's check our model assumptions. Remember, a model is only valid for inference (i.e., means and pwc) IF if fulfills the linear model assumptions.  
+Before we do that, let's check our model assumptions. Remember, a model is only valid for inference (i.e., means and pwc) IF it fulfills the linear model assumptions.  
 
 # g) Linear model assumptions  
 ## Extracting residuals
@@ -139,7 +152,7 @@ First, let's extract our model residuals, and also create studentized residuals.
 ```{r rcbd_mix_resid}
 library(broom.mixed)
 spp_rcbd_mix_resid <- augment(spp_rcbd_mix_mod) %>%
-  mutate(.studresid=rstudent(spp_rcbd_mix_mod))
+  mutate(.studresid = rstudent(spp_rcbd_mix_mod))
 
 spp_rcbd_mix_resid
 ```
@@ -155,7 +168,7 @@ One difference in mixed models is that the 3 first assumptions are also applied 
 
 ### Block random effects are iid ~ N(0,var_a)  
 ```{r randeff_block}
-randeff_block
+randeff_block <- ranef(spp_rcbd_mix_mod)$rep
 
 randeff_block
 ```
@@ -178,9 +191,9 @@ Nothing to worry here, especially since we only have 4 points.
 
 ### Block:krate random effects are iid ~ N(0,var_b)  
 ```{r randeff_block}
-randeff_blockkrate 
+randeff_blockkrate <- ranef(spp_rcbd_mix_mod)$`krate_kgha:rep`
 
-randeff_blockkrate
+randeff_blockkrate # 12 points because 3 krates and 4 reps
 ```
 
 
@@ -251,10 +264,15 @@ Remember that it is at this level that we establish the hierarchy of how our pai
 Let's extract it by comparing everything to everything else.
 ```{r interaction means all}
 spp_rcbd_mix_means_all <- emmeans(spp_rcbd_mix_mod, 
-                                  ~nrate_kgha:krate_kgha)
+                                  ~nrate_kgha:krate_kgha) # not neccessary to order
 
 spp_rcbd_mix_means_all
 ```
+- nrate_kgha:krate_kgha: SE = 330, df = 22.9
+- nrate_kgha: SE = 209, df = 8.19
+- krate_kgha: SE = 232, df = 8.28
+
+My note: for unbalanced data we can expect the SE's to be different. 
 
 In a split-plot, we have 2 sources of error because we have 2 different sizes of EU that were randomized separately.  
 
@@ -263,14 +281,20 @@ When we ask for the interaction means (like in chunk above), the emmean error is
 What happens with the emmean error if we ask for the emmean of the main effects of K and N rate separately? 
 
 ```{r k rate means}
+spp_rcbd_mix_means_all <- emmeans(spp_rcbd_mix_mod, 
+                                  ~nrate_kgha) # not neccessary to order
 
+spp_rcbd_mix_means_all
 ```
 The SE of the whole-plot treatment factor (k rate) is **232**.
 
 What about for the split-plot treatment factor (n rate)?  
 
 ```{r n rate means }
+spp_rcbd_mix_means_all <- emmeans(spp_rcbd_mix_mod, 
+                                  ~ krate_kgha) # not neccessary to order
 
+spp_rcbd_mix_means_all
 ```
 It is 209.  
 
@@ -330,11 +354,13 @@ ggplot(mapping = aes(fill = trtname))+
         panel.grid.minor.y = element_blank(),
         legend.position = "none")
 
-ggsave("../output/spp_rcbd_mix_means.png",
+ggsave("output/spp_rcbd_mix_means.png",
        width = 8,
        height = 5)
 ```
 
 What happened the letter separation compared to the RCBD mixed with blocks random?  
 
-
+# Quiz questions
+What is the main difference int he model function between a split plot in a RCBD vs a RCBD? 
+- The whole-plot was nested within the block or rep. 
